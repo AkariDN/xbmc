@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -29,8 +30,14 @@ public:
   bool Reuseable(const std::string &script) const { return !m_bStop && m_reusable && GetState() == InvokerStateScriptDone && m_script == script; };
   virtual void Release();
 
+  bool NeedCleanup() const { return !m_bStop && m_reusable && GetState() == InvokerStateScriptDone && m_cleanup_params && m_cleanup_params->NeedCleanup(false); }
+  bool NeedCleanupAtExit() const { return m_reusable && (GetState() == InvokerStateScriptDone || GetState() <= InvokerStateRunning) && m_cleanup_params && m_cleanup_params->NeedCleanup(true); }
+  bool GetCleanupIds(std::vector<int>& ids);
+  void Cleanup(const std::vector<int>& ids);
+  void CleanupAtExit();
+
 protected:
-  bool execute(const std::string &script, const std::vector<std::string> &arguments) override;
+  bool execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup) override;
   bool stop(bool wait) override;
 
   void OnStartup() override;
@@ -43,6 +50,10 @@ private:
   CScriptInvocationManager *m_invocationManager;
   std::string m_script;
   std::vector<std::string> m_args;
+
+  CleanupParamsPtr m_cleanup_params;
+  std::atomic<time_t> m_last_check;
+  std::vector<int> m_cleanup_ids;
 
   std::mutex m_mutex;
   std::condition_variable m_condition;

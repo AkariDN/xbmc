@@ -125,7 +125,7 @@ CPythonInvoker::~CPythonInvoker()
   onExecutionFinalized();
 }
 
-bool CPythonInvoker::Execute(const std::string &script, const std::vector<std::string> &arguments /* = std::vector<std::string>() */)
+bool CPythonInvoker::Execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup)
 {
   if (script.empty())
     return false;
@@ -139,14 +139,17 @@ bool CPythonInvoker::Execute(const std::string &script, const std::vector<std::s
   if (!onExecutionInitialized())
     return false;
 
-  return ILanguageInvoker::Execute(script, arguments);
+  return ILanguageInvoker::Execute(script, arguments, cleanup);
 }
 
-bool CPythonInvoker::execute(const std::string &script, const std::vector<std::string> &arguments)
+bool CPythonInvoker::execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup)
 {
   // copy the code/script into a local string buffer
   m_sourceFile = script;
   m_pythonPath.clear();
+
+  if (cleanup)
+    cleanup->reset();
 
   // copy the arguments into a local buffer
   unsigned int argc = arguments.size();
@@ -370,6 +373,18 @@ bool CPythonInvoker::execute(const std::string &script, const std::vector<std::s
     PyObject *m = PyImport_AddModule("xbmc");
     if (m == NULL || PyObject_SetAttrString(m, "abortRequested", PyBool_FromLong(1)))
       CLog::Log(LOGERROR, "CPythonInvoker(%d, %s): failed to set abortRequested", GetId(), m_sourceFile.c_str());
+
+    if (cleanup && m && CPythonCleanupParams::IsAddonSupported(m_addon))
+    {
+      CPythonCleanupParams* cp = new CPythonCleanupParams();
+      if (cp->Load(m))
+      {
+        cleanup->reset(cp);
+        CLog::Log(LOGDEBUG, "CPythonInvoker(%d, %s): setting cleanup parameters", GetId(), m_sourceFile.c_str());
+      }
+      else
+        delete cp;
+    }
 
     // make sure all sub threads have finished
     for (PyThreadState *old = nullptr; m_threadState != nullptr;)
@@ -711,4 +726,54 @@ void CPythonInvoker::addNativePath(const std::string& path)
     m_pythonPath += PY_PATH_SEP;
 
   m_pythonPath += path;
+}
+
+bool CPythonCleanupParams::IsAddonSupported(const ADDON::AddonPtr& addon)
+{
+  if (!addon || !addon->IsType(ADDON::TYPE::ADDON_VIDEO))
+    return false;
+  bool reuse = false;
+  if (addon->ExtraInfo().find("reuselanguageinvoker") != addon->ExtraInfo().end())
+    reuse = addon->ExtraInfo().at("reuselanguageinvoker") == "true";
+  return reuse;
+}
+
+void CPythonCleanupParams::load(void *data)
+{
+  PyObject* xbmc = static_cast<PyObject*>(data);
+  if (!PyObject_HasAttrString(xbmc, "cleanup"))
+    return;
+  PyObject* attr = PyObject_GetAttrString(xbmc, "cleanup");
+  if (!attr)
+    return;
+  PyObject_DelAttrString(xbmc, "cleanup");
+  if (PyBool_Check(attr))
+    m_cleanup = true;
+  else if (PyDict_Check(attr))
+  {
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(attr, &pos, &key, &value))
+      m_cleanup_timeouts[PyInt_AS_LONG(key)] = static_cast<time_t>(PyFloat_AS_DOUBLE(value));
+  }
+  Py_DECREF(attr);
+}
+
+std::vector<std::string> CPythonCleanupParams::GetCleanupArgs(const ADDON::AddonPtr& addon, const std::vector<std::string>& args, const std::vector<int> *ids)
+{
+  std::string s = "?kodi_action=cleanup";
+  if (ids)
+    for (auto i : *ids)
+      s += "&id=" + std::to_string(i);
+  else
+    for (auto i : m_cleanup_timeouts)
+      s += "&id=" + std::to_string(i.first);
+
+  std::vector<std::string> argv;
+  argv.push_back(CURL(args[0]).GetWithoutFilename());
+  argv.push_back("-1");
+  argv.push_back(s);
+  argv.push_back("resume:false");
+
+  return argv;
 }

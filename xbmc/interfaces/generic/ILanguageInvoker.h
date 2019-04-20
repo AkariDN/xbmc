@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,13 +28,30 @@ typedef enum {
   InvokerStateFailed
 } InvokerState;
 
+class ICleanupParams
+{
+public:
+  bool Load(void *data);
+  bool NeedCleanup(bool atexit) const { return (m_flags & (atexit ? 3 : 2)) != 0; }
+  bool GetCleanupIDs(time_t cur, std::vector<int>& ids);
+  virtual std::vector<std::string> GetCleanupArgs(const ADDON::AddonPtr& addon, const std::vector<std::string>& args, const std::vector<int> *ids) = 0;
+protected:
+  virtual void load(void *data) = 0;
+  void update_flags();
+  std::atomic<int> m_flags;
+  bool m_cleanup;
+  std::map<int, time_t> m_cleanup_timeouts;
+};
+
+typedef std::unique_ptr<ICleanupParams> CleanupParamsPtr;
+
 class ILanguageInvoker
 {
 public:
   explicit ILanguageInvoker(ILanguageInvocationHandler *invocationHandler);
   virtual ~ILanguageInvoker();
 
-  virtual bool Execute(const std::string &script, const std::vector<std::string> &arguments = std::vector<std::string>());
+  virtual bool Execute(const std::string &script, const std::vector<std::string> &arguments = std::vector<std::string>(), CleanupParamsPtr *cleanup = nullptr);
   virtual bool Stop(bool abort = false);
   virtual bool IsStopping() const;
 
@@ -49,7 +67,7 @@ public:
 protected:
   friend class CLanguageInvokerThread;
 
-  virtual bool execute(const std::string &script, const std::vector<std::string> &arguments) = 0;
+  virtual bool execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup) = 0;
   virtual bool stop(bool abort) = 0;
 
   virtual void pulseGlobalEvent();

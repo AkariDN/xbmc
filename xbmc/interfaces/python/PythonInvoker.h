@@ -20,13 +20,22 @@
 
 struct _ts;
 
+class CPythonCleanupParams : public ICleanupParams
+{
+public:
+  std::vector<std::string> GetCleanupArgs(const ADDON::AddonPtr& addon, const std::vector<std::string>& args, const std::vector<int> *ids) override;
+  static bool IsAddonSupported(const ADDON::AddonPtr& addon);
+protected:
+  void load(void *data) override;
+};
+
 class CPythonInvoker : public ILanguageInvoker
 {
 public:
   explicit CPythonInvoker(ILanguageInvocationHandler *invocationHandler);
   ~CPythonInvoker() override;
 
-  bool Execute(const std::string &script, const std::vector<std::string> &arguments = std::vector<std::string>()) override;
+  bool Execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup) override;
 
   bool IsStopping() const override { return m_stop || ILanguageInvoker::IsStopping(); }
 
@@ -34,7 +43,7 @@ public:
 
 protected:
   // implementation of ILanguageInvoker
-  bool execute(const std::string &script, const std::vector<std::string> &arguments) override;
+  bool execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup) override;
   virtual void executeScript(void *fp, const std::string &script, void *module, void *moduleDict);
   bool stop(bool abort) override;
   void onExecutionDone() override;

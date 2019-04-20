@@ -58,6 +58,13 @@ void CScriptInvocationManager::Process()
   for (std::vector<LanguageInvokerThread>::const_iterator it = tempList.begin(); it != tempList.end(); ++it)
     m_scriptPaths.erase(it->script);
 
+  if (m_lastInvokerThread && m_lastInvokerThread->NeedCleanup())
+  {
+    std::vector<int> ids;
+    if (m_lastInvokerThread->GetCleanupIds(ids))
+      m_lastInvokerThread->Cleanup(ids);
+  }
+
   // we can leave the lock now
   lock.Leave();
 
@@ -76,6 +83,9 @@ void CScriptInvocationManager::Uninitialize()
 
   // execute Process() once more to handle the remaining scripts
   Process();
+
+  if (m_lastInvokerThread && m_lastInvokerThread->NeedCleanupAtExit())
+    m_lastInvokerThread->CleanupAtExit();
 
   // it is safe to relese early, thread must be in m_scripts too
   m_lastInvokerThread = nullptr;

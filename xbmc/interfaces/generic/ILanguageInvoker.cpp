@@ -20,12 +20,12 @@ ILanguageInvoker::ILanguageInvoker(ILanguageInvocationHandler *invocationHandler
 
 ILanguageInvoker::~ILanguageInvoker() = default;
 
-bool ILanguageInvoker::Execute(const std::string &script, const std::vector<std::string> &arguments /* = std::vector<std::string>() */)
+bool ILanguageInvoker::Execute(const std::string &script, const std::vector<std::string> &arguments, CleanupParamsPtr *cleanup)
 {
   if (m_invocationHandler)
     m_invocationHandler->OnScriptStarted(this);
 
-  return execute(script, arguments);
+  return execute(script, arguments, cleanup);
 }
 
 bool ILanguageInvoker::Stop(bool abort /* = false */)
@@ -92,4 +92,31 @@ void ILanguageInvoker::setState(InvokerState state)
     return;
 
   m_state = state;
+}
+
+bool ICleanupParams::Load(void *data)
+{
+  m_cleanup = false;
+  m_cleanup_timeouts.clear();
+  load(data);
+  update_flags();
+  return m_flags != 0;
+}
+
+bool ICleanupParams::GetCleanupIDs(time_t cur, std::vector<int>& ids)
+{
+  for (auto& it : m_cleanup_timeouts)
+    if (it.second <= cur)
+      ids.push_back(it.first);
+  if (ids.empty())
+    return false;
+  for (auto& id : ids)
+    m_cleanup_timeouts.erase(id);
+  update_flags();
+  return true;
+}
+
+void ICleanupParams::update_flags()
+{
+  m_flags = (m_cleanup_timeouts.empty() ? 0 : 2) | (m_cleanup ? 1 : 0);
 }
