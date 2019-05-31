@@ -164,21 +164,38 @@ JSONRPC_STATUS CFileOperations::GetDirectory(const std::string &method, ITranspo
 JSONRPC_STATUS CFileOperations::GetFileDetails(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result)
 {
   std::string file = parameterObject["file"].asString();
-  if (!CFile::Exists(file))
-    return InvalidParams;
+  std::string media = parameterObject["media"].asString();
+  CFileItemPtr item;
 
-  if (!CFileUtils::RemoteAccessAllowed(file))
-    return InvalidParams;
+  if (URIUtils::IsPlugin(file))
+  {
+    item = std::make_shared<CFileItem>();
+    bool ret = false;
+    if (media == "video")
+      ret = CVideoLibrary::FillFileItem(file, item, parameterObject);
+    else if (media == "music")
+      ret = CAudioLibrary::FillFileItem(file, item, parameterObject);
+    if (!ret)
+      return InvalidParams;
+  }
+  else
+  {
+    if (!CFile::Exists(file))
+      return InvalidParams;
 
-  std::string path = URIUtils::GetDirectory(file);
+    if (!CFileUtils::RemoteAccessAllowed(file))
+      return InvalidParams;
 
-  CFileItemList items;
-  if (path.empty() || !CDirectory::GetDirectory(path, items, "", DIR_FLAG_DEFAULTS) || !items.Contains(file))
-    return InvalidParams;
+    std::string path = URIUtils::GetDirectory(file);
 
-  CFileItemPtr item = items.Get(file);
-  if (!URIUtils::IsUPnP(file))
-    FillFileItem(item, item, parameterObject["media"].asString(), parameterObject);
+    CFileItemList items;
+    if (path.empty() || !CDirectory::GetDirectory(path, items, "", DIR_FLAG_DEFAULTS) || !items.Contains(file))
+      return InvalidParams;
+
+    item = items.Get(file);
+    if (!URIUtils::IsUPnP(file))
+      FillFileItem(item, item, media, parameterObject);
+  }
 
   // Check if the "properties" list exists
   // and make sure it contains the "file"
