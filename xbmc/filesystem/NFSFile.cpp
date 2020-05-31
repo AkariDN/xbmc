@@ -50,6 +50,16 @@
 #define S_IRUSR _S_IREAD
 #endif
 
+void AddFrontSlash(std::string& path)
+{
+  if (path.empty() || path.front() != '/') path = '/' + path;
+}
+
+std::string AddFrontSlash(const std::string& path)
+{
+  return path.empty() || path.front() != '/' ? '/' + path : path;
+}
+
 using namespace XFILE;
 
 CNfsConnection::CNfsConnection()
@@ -74,6 +84,8 @@ void CNfsConnection::resolveHost(const CURL &url)
 std::list<std::string> CNfsConnection::GetExportList(const CURL &url)
 {
     std::list<std::string> retList;
+
+    if (url.HasOption("norpc")) return retList;
 
     struct exportnode *exportlist, *tmp;
     exportlist = mount_getexports(m_resolvedHostName.c_str());
@@ -254,6 +266,13 @@ bool CNfsConnection::splitUrlIntoExportAndPath(const CURL& url,std::string &expo
         }
       }
     }
+    else if (url.HasOption("norpc"))
+    {
+      URIUtils::Split(AddFrontSlash(url.GetFileName()), exportPath, relativePath);
+      if (exportPath.length() > 1 && exportPath.back() == '/') exportPath.pop_back();
+      AddFrontSlash(relativePath);
+      ret = true;
+    }
     return ret;
 }
 
@@ -279,6 +298,12 @@ bool CNfsConnection::Connect(const CURL& url, std::string &relativePath)
 
     if(contextRet == CONTEXT_NEW) //new context was created - we need to mount it
     {
+      if (!url.GetOptions().empty())
+      {
+        struct nfs_url* tmp = nfs_parse_url_full(m_pNfsContext, url.Get().c_str());
+        if (tmp) nfs_destroy_url(tmp);
+      }
+
       //we connect to the directory of the path. This will be the "root" path of this connection then.
       //So all fileoperations are relative to this mountpoint...
       nfsRet = nfs_mount(m_pNfsContext, m_resolvedHostName.c_str(), exportPath.c_str());
@@ -298,6 +323,16 @@ bool CNfsConnection::Connect(const CURL& url, std::string &relativePath)
     //read chunksize only works after mount
     m_readChunkSize = nfs_get_readmax(m_pNfsContext);
     m_writeChunkSize = nfs_get_writemax(m_pNfsContext);
+
+    if (url.HasOption("norpc"))
+    {
+        auto it = std::find_if(m_exportList.begin(), m_exportList.end(), [&exportPath](const std::string& path) { return URIUtils::PathHasParent(exportPath, path); });
+        if (it == m_exportList.end())
+        {
+            m_exportList.push_back(exportPath);
+            m_exportList.sort(std::greater<std::string>());
+        }
+    }
 
     if(contextRet == CONTEXT_NEW)
     {
@@ -410,40 +445,34 @@ void CNfsConnection::keepAlive(std::string _exportPath, struct nfsfh  *_pFileHan
   nfs_lseek(pContext, _pFileHandle, offset, SEEK_SET, &offset);
 }
 
-int CNfsConnection::stat(const CURL &url, NFSSTAT *statbuff)
+int CNfsConnection::stat(const CURL &url, nfs_stat_64 *statbuff)
 {
   CSingleLock lock(*this);
-  int nfsRet = 0;
-  std::string exportPath;
-  std::string relativePath;
+  int nfsRet = -1;
   struct nfs_context *pTmpContext = NULL;
 
-  resolveHost(url);
+  if (!m_exportPath.empty() && URIUtils::PathHasParent(url.GetFileName(), m_exportPath))
+      return nfs_stat64(m_pNfsContext, AddFrontSlash(url.GetFileName().substr(m_exportPath.length())).c_str(), statbuff);
 
-  if(splitUrlIntoExportAndPath(url, exportPath, relativePath))
+  pTmpContext = nfs_init_context();
+  if (pTmpContext)
   {
-    pTmpContext = nfs_init_context();
+    struct nfs_url* p = nfs_parse_url_full(pTmpContext, url.Get().c_str());
+    if (!p) return nfsRet;
 
-    if(pTmpContext)
-    {
-      //we connect to the directory of the path. This will be the "root" path of this connection then.
-      //So all fileoperations are relative to this mountpoint...
-      nfsRet = nfs_mount(pTmpContext, m_resolvedHostName.c_str(), exportPath.c_str());
+    //we connect to the directory of the path. This will be the "root" path of this connection then.
+    //So all fileoperations are relative to this mountpoint...
+    nfsRet = nfs_mount(pTmpContext, p->server, p->path);
+    if (nfsRet == 0)
+      nfsRet = nfs_stat64(pTmpContext, p->file, statbuff);
+    else
+      CLog::Log(LOGERROR, "NFS: Failed to mount nfs share: %s (%s)", p->path,
+                nfs_get_error(m_pNfsContext));
 
-      if(nfsRet == 0)
-      {
-        nfsRet = nfs_stat(pTmpContext, relativePath.c_str(), statbuff);
-      }
-      else
-      {
-        CLog::Log(LOGERROR, "NFS: Failed to mount nfs share: %s (%s)", exportPath.c_str(),
-                  nfs_get_error(m_pNfsContext));
-      }
-
-      nfs_destroy_context(pTmpContext);
-      CLog::Log(LOGDEBUG, "NFS: Connected to server %s and export %s in tmpContext",
-                url.GetHostName().c_str(), exportPath.c_str());
-    }
+    nfs_destroy_context(pTmpContext);
+    CLog::Log(LOGDEBUG, "NFS: Connected to server %s and export %s in tmpContext",
+              url.GetHostName().c_str(), p->path);
+    nfs_destroy_url(p);
   }
   return nfsRet;
 }
@@ -574,9 +603,9 @@ int CNFSFile::Stat(const CURL& url, struct __stat64* buffer)
     return -1;
 
 
-  NFSSTAT tmpBuffer = {0};
+  nfs_stat_64 tmpBuffer = {0};
 
-  ret = nfs_stat(gNfsConnection.GetNfsContext(), filename.c_str(), &tmpBuffer);
+  ret = nfs_stat64(gNfsConnection.GetNfsContext(), filename.c_str(), &tmpBuffer);
 
   //if buffer == NULL we where called from Exists - in that case don't spam the log with errors
   if (ret != 0 && buffer != NULL)
@@ -589,22 +618,18 @@ int CNFSFile::Stat(const CURL& url, struct __stat64* buffer)
   {
     if(buffer)
     {
-#if defined(TARGET_WINDOWS)//! @todo get rid of this define after gotham v13
-      memcpy(buffer, &tmpBuffer, sizeof(struct __stat64));
-#else
       memset(buffer, 0, sizeof(struct __stat64));
-      buffer->st_dev = tmpBuffer.st_dev;
-      buffer->st_ino = tmpBuffer.st_ino;
-      buffer->st_mode = tmpBuffer.st_mode;
-      buffer->st_nlink = tmpBuffer.st_nlink;
-      buffer->st_uid = tmpBuffer.st_uid;
-      buffer->st_gid = tmpBuffer.st_gid;
-      buffer->st_rdev = tmpBuffer.st_rdev;
-      buffer->st_size = tmpBuffer.st_size;
-      buffer->st_atime = tmpBuffer.st_atime;
-      buffer->st_mtime = tmpBuffer.st_mtime;
-      buffer->st_ctime = tmpBuffer.st_ctime;
-#endif
+      buffer->st_dev = static_cast<decltype(buffer->st_dev)>(tmpBuffer.nfs_dev);
+      buffer->st_ino = static_cast<decltype(buffer->st_ino)>(tmpBuffer.nfs_ino);
+      buffer->st_mode = static_cast<decltype(buffer->st_mode)>(tmpBuffer.nfs_mode);
+      buffer->st_nlink = static_cast<decltype(buffer->st_nlink)>(tmpBuffer.nfs_nlink);
+      buffer->st_uid = static_cast<decltype(buffer->st_uid)>(tmpBuffer.nfs_uid);
+      buffer->st_gid = static_cast<decltype(buffer->st_gid)>(tmpBuffer.nfs_gid);
+      buffer->st_rdev = static_cast<decltype(buffer->st_rdev)>(tmpBuffer.nfs_rdev);
+      buffer->st_size = static_cast<decltype(buffer->st_size)>(tmpBuffer.nfs_size);
+      buffer->st_atime = static_cast<decltype(buffer->st_atime)>(tmpBuffer.nfs_atime);
+      buffer->st_mtime = static_cast<decltype(buffer->st_mtime)>(tmpBuffer.nfs_mtime);
+      buffer->st_ctime = static_cast<decltype(buffer->st_ctime)>(tmpBuffer.nfs_ctime);
     }
   }
   return ret;

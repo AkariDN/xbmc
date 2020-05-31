@@ -554,6 +554,11 @@ int CVideoDatabase::GetPathId(const std::string& strPath)
     std::string strPath1(strPath);
     if (URIUtils::IsStack(strPath) || StringUtils::StartsWithNoCase(strPath, "rar://") || StringUtils::StartsWithNoCase(strPath, "zip://"))
       URIUtils::GetParentPath(strPath,strPath1);
+    if (StringUtils::StartsWithNoCase(strPath1, "nfs://"))
+    {
+      size_t i = strPath1.find('?');
+      if (i != std::string::npos) strPath1.resize(i);
+    }
 
     URIUtils::AddSlashAtEnd(strPath1);
 

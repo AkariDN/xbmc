@@ -538,7 +538,15 @@ CMediaSource *CGUIDialogContextMenu::GetShare(const std::string &type, const CFi
     }
     else
     {
-      if (!URIUtils::CompareWithoutSlashAtEnd(testShare.strPath, item->GetPath()))
+      std::string path = testShare.strPath;
+      if (StringUtils::StartsWithNoCase(path, "nfs://") && path.find('?') != std::string::npos)
+      {
+        // Reorder options
+        CURL url(path);
+        url.RemoveOption("");
+        path = url.Get();
+      }
+      if (!URIUtils::CompareWithoutSlashAtEnd(path, item->GetPath()))
         continue;
     }
     // paths match, what about share name - only match the leftmost

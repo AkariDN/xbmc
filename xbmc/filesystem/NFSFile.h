@@ -56,7 +56,7 @@ public:
 
   //special stat which uses its own context
   //needed for getting intervolume symlinks to work
-  int stat(const CURL &url, NFSSTAT *statbuff);
+  int stat(const CURL &url, struct nfs_stat_64 *statbuff);
 
   void AddActiveConnection();
   void AddIdleConnection();

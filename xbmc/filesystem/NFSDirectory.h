@@ -28,7 +28,7 @@ namespace XFILE
     private:
       bool GetServerList(CFileItemList &items);
       bool GetDirectoryFromExportList(const std::string& strPath, CFileItemList &items);
-      bool ResolveSymlink( const std::string &dirName, struct nfsdirent *dirent, CURL &resolvedUrl);
+      bool ResolveSymlink(const CURL& url, std::string& path, struct nfsdirent* dirent);
   };
 }
 
